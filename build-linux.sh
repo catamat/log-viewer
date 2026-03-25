@@ -1,0 +1,1 @@
+env GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -buildid=" -trimpath -gcflags="all=-trimpath=$(pwd)" -asmflags="all=-trimpath=$(pwd)"

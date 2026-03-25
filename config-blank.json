@@ -1,0 +1,13 @@
+{
+    "serverPort": 3333,
+    "logFolders": [
+        {
+            "name": "Local Test",
+            "path": "/absolute/path/to/logs"
+        },
+        {
+            "name": "My App",
+            "path": "/absolute/path/to/my/app/logs/folder"
+        }
+    ]
+}
