@@ -1,11 +1,10 @@
 # Log-Viewer
 [![License](https://img.shields.io/github/license/mashape/apistatus.svg)](https://github.com/catamat/log-viewer/blob/master/LICENSE)
-[![Build Status](https://travis-ci.org/catamat/log-viewer.svg?branch=master)](https://travis-ci.org/catamat/log-viewer)
 [![Go Report Card](https://goreportcard.com/badge/github.com/catamat/log-viewer)](https://goreportcard.com/report/github.com/catamat/log-viewer)
 [![Go Reference](https://pkg.go.dev/badge/github.com/catamat/log-viewer.svg)](https://pkg.go.dev/github.com/catamat/log-viewer)
 [![Version](https://img.shields.io/github/tag/catamat/log-viewer.svg?color=blue&label=version)](https://github.com/catamat/log-viewer/releases)
 
-Log-Viewer is a simple web-based viewer for JSON logs.
+Log-Viewer is a web-based viewer for JSON logs.
 
 It provides a lightweight local UI to inspect line-delimited JSON log files from one or more folders, with quick filtering, dynamic columns, and file selection directly in the browser.
 
