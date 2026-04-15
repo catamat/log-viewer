@@ -1,10 +1,10 @@
 module log-viewer
 
-go 1.24.5
+go 1.25
 
 require (
 	github.com/catamat/config v0.1.6
-	github.com/goccy/go-json v0.10.5
+	github.com/goccy/go-json v0.10.6
 	github.com/gofiber/fiber/v2 v2.52.12
 )
 

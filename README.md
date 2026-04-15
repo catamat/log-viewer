@@ -40,10 +40,6 @@ Create `config.json` starting from `config-blank.json` and set the folders you w
 
 ## Run
 
-```bash
-go run .
-```
-
 The app starts on `127.0.0.1:<serverPort>` and serves the UI at `/log-viewer`.
 
 ## Expected Log Format

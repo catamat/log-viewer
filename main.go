@@ -594,21 +594,47 @@ const indexHTML = `<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Log Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
   <style>
     html, body { height: 100%; margin: 0; }
     body {
-      font-family: Arial, sans-serif;
+      font-family: 'Roboto', sans-serif;
       background: #f7f7f9;
       color: #222;
       display: flex;
       flex-direction: column;
       height: 100vh;
       overflow: hidden;
-      padding: 16px;
       box-sizing: border-box;
     }
 
-    h1 { margin: 0 0 12px; }
+    .appbar {
+      display: flex;
+      align-items: center;
+      min-height: 48px;
+      padding: 0 16px;
+      background: #d7d8dc;
+    }
+
+    .appbar-title {
+      margin: 0;
+      color: #111;
+      font-size: 24px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
+    .page-content {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 16px;
+      box-sizing: border-box;
+    }
 
     .toolbar {
       display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
@@ -735,588 +761,592 @@ const indexHTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <h1>Log Viewer</h1>
-
-  <div class="toolbar">
-    <label>Folder:
-      <select id="folder" style="width:220px">
-        <option value="">Select</option>
-      </select>
-    </label>
-
-    <label>File:
-      <select id="file" style="width:220px">
-        <option value="">All</option>
-      </select>
-    </label>
-
-    <label>Search:
-      <input id="search" type="text" placeholder="Search any key or value..." style="width:360px" />
-    </label>
-
-    <label>Limit:
-      <input id="limit" type="number" value="5000" min="1" step="1" style="width:100px" />
-    </label>
-
-    <button id="reloadBtn">Reload</button>
-    <button id="clearBtn">Clear filters</button>
-  </div>
-
-  <div class="meta" id="meta">Ready.</div>
-
-  <div class="table-wrap">
-    <table id="logTable">
-      <colgroup id="colgroup"></colgroup>
-      <thead id="thead"></thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
-
-  <div class="errbox" id="errbox"></div>
-
-<script>
-const COLUMN_PRIORITY = {
-  time: 0,
-  timestamp: 1,
-  ts: 2,
-  datetime: 3,
-  date: 4,
-  createdat: 5,
-  loggedat: 6,
-  eventtime: 7,
-  level: 20,
-  severity: 21,
-  loglevel: 22,
-  lvl: 23,
-  message: 40,
-  msg: 41,
-  event: 42,
-  description: 43,
-  caller: 60,
-  logger: 61,
-  service: 62,
-  component: 63,
-  sourcefile: 1000,
-  linenumber: 1001
-};
-
-const tbody = document.getElementById('tbody');
-const meta = document.getElementById('meta');
-const errbox = document.getElementById('errbox');
-const folderSelect = document.getElementById('folder');
-const fileSelect = document.getElementById('file');
-const table = document.getElementById('logTable');
-const thead = document.getElementById('thead');
-const colgroup = document.getElementById('colgroup');
-const tableWrap = document.querySelector('.table-wrap');
-
-let filteredRecords = [];
-let allRecords = [];
-let allColumns = [];
-let columnFilterState = {};
-let columnWidths = {};
-
-async function loadFolders() {
-  const currentValue = folderSelect.value;
-
-  try {
-    const res = await fetch('/log-viewer/api/folders');
-    const data = await res.json();
-
-    folderSelect.innerHTML = '<option value="">Select</option>';
-
-    if (Array.isArray(data.folders)) {
-      for (const f of data.folders) {
-        const opt = document.createElement('option');
-        opt.value = f.name;
-        opt.textContent = f.name;
-        folderSelect.appendChild(opt);
-      }
-    }
-
-    const exists = Array.from(folderSelect.options).some(o => o.value === currentValue);
-    folderSelect.value = exists ? currentValue : '';
-  } catch (e) {
-    folderSelect.innerHTML = '<option value="">Select</option>';
-  }
-}
-
-async function loadFiles() {
-  const currentValue = fileSelect.value;
-  const folder = folderSelect.value;
-
-  errbox.style.display = 'none';
-  errbox.textContent = '';
-
-  fileSelect.innerHTML = '<option value="">All</option>';
-
-  if (!folder) {
-    return;
-  }
-
-  try {
-    const params = new URLSearchParams({ folder });
-    const res = await fetch('/log-viewer/api/files?' + params.toString());
-    const data = await res.json();
-
-    if (!data.ok) {
-      throw new Error(data.error || 'Invalid API response');
-    }
-
-    if (Array.isArray(data.files)) {
-      for (const f of data.files) {
-        const opt = document.createElement('option');
-        opt.value = f;
-        opt.textContent = f;
-        fileSelect.appendChild(opt);
-      }
-    }
-
-    const exists = Array.from(fileSelect.options).some(o => o.value === currentValue);
-    fileSelect.value = exists ? currentValue : '';
-
-    if (Array.isArray(data.errors) && data.errors.length > 0) {
-      errbox.style.display = 'block';
-      errbox.innerHTML = '<b>Folder read warnings:</b><br>' +
-        data.errors.map(e => escapeHtml(e)).join('<br>');
-    }
-  } catch (e) {
-    fileSelect.innerHTML = '<option value="">All</option>';
-  }
-}
-
-async function loadLogs() {
-  const folder = document.getElementById('folder').value;
-  const file = document.getElementById('file').value;
-  const q = document.getElementById('search').value.trim();
-  const limit = document.getElementById('limit').value || '5000';
-
-  const params = new URLSearchParams({ limit });
-  if (folder) params.set('folder', folder);
-  if (file) params.set('file', file);
-  if (q) params.set('q', q);
-
-  meta.textContent = 'Loading...';
-  errbox.style.display = 'none';
-  errbox.textContent = '';
-  tbody.innerHTML = '';
-
-  if (!folder) {
-    allRecords = [];
-    filteredRecords = [];
-    allColumns = [];
-    rebuildTable();
-    renderAllRows();
-    meta.textContent = 'Select a folder';
-    tableWrap.scrollTop = 0;
-    return;
-  }
-
-  try {
-    const res = await fetch('/log-viewer/api/logs?' + params.toString());
-    const data = await res.json();
-
-    if (!data.ok) {
-      throw new Error(data.error || 'Invalid API response');
-    }
-
-    allRecords = Array.isArray(data.records) ? data.records : [];
-    allColumns = Array.isArray(data.columns) ? data.columns : buildColumnsFromRecords(allRecords);
-    rebuildTable();
-    tableWrap.scrollTop = 0;
-    applyColumnFilters();
-
-    if (Array.isArray(data.errors) && data.errors.length > 0) {
-      errbox.style.display = 'block';
-      errbox.innerHTML = '<b>Parsing/read warnings:</b><br>' +
-        data.errors.slice(0, 20).map(e => escapeHtml(e)).join('<br>') +
-        (data.errors.length > 20 ? '<br>... ' + (data.errors.length - 20) + ' more warnings' : '');
-    }
-  } catch (e) {
-    meta.textContent = 'Loading error';
-    errbox.style.display = 'block';
-    errbox.textContent = String(e);
-    allRecords = [];
-    filteredRecords = [];
-    allColumns = [];
-    rebuildTable();
-    renderAllRows();
-    tableWrap.scrollTop = 0;
-  }
-}
-
-function buildColumnsFromRecords(records) {
-  const seen = new Set();
-
-  records.forEach(record => {
-    if (!record || typeof record !== 'object') {
-      return;
-    }
-    Object.keys(record).forEach(key => seen.add(key));
-  });
-
-  return Array.from(seen).sort(compareColumns);
-}
-
-function compareColumns(a, b) {
-  const pa = columnPriority(a);
-  const pb = columnPriority(b);
-  if (pa === pb) {
-    return a.localeCompare(b);
-  }
-  return pa - pb;
-}
-
-function columnPriority(name) {
-  const normalized = normalizeKeyName(name);
-  if (Object.prototype.hasOwnProperty.call(COLUMN_PRIORITY, normalized)) {
-    return COLUMN_PRIORITY[normalized];
-  }
-  return 500;
-}
-
-function normalizeKeyName(name) {
-  return String(name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[-\s_.@/]+/g, '');
-}
-
-function rebuildTable() {
-  colgroup.innerHTML = '';
-  thead.innerHTML = '';
-
-  if (!allColumns.length) {
-    return;
-  }
-
-  const colParts = [];
-  const headerParts = [];
-  const filterParts = [];
-
-  for (const col of allColumns) {
-    const width = columnWidths[col] || guessColumnWidth(col);
-    colParts.push('<col style="width:' + width + 'px">');
-    headerParts.push(
-      '<th class="resizable" data-col="' + escapeHtml(col) + '"><div class="th-content">' +
-      escapeHtml(col) +
-      '<div class="resizer"></div></div></th>'
-    );
-
-    const currentValue = columnFilterState[col] || '';
-    const extraClass = isMonospaceColumn(col, null) ? ' mono' : '';
-    filterParts.push(
-      '<th><input class="filter-input' + extraClass + '" data-col="' + escapeHtml(col) +
-      '" type="text" placeholder="Filter" value="' + escapeHtml(currentValue) + '"></th>'
-    );
-  }
-
-  colgroup.innerHTML = colParts.join('');
-  thead.innerHTML =
-    '<tr class="header-row">' + headerParts.join('') + '</tr>' +
-    '<tr class="filter-row">' + filterParts.join('') + '</tr>';
-
-  bindColumnFilterInputs();
-  initColumnResize();
-}
-
-function bindColumnFilterInputs() {
-  document.querySelectorAll('.filter-input').forEach(input => {
-    let localTimer = null;
-    input.addEventListener('input', () => {
-      columnFilterState[input.dataset.col] = input.value;
-      clearTimeout(localTimer);
-      localTimer = setTimeout(applyColumnFilters, 120);
-    });
-  });
-}
-
-function applyColumnFilters() {
-  const activeFilters = {};
-
-  Object.entries(columnFilterState).forEach(([key, value]) => {
-    const needle = String(value || '').trim().toLowerCase();
-    if (needle) {
-      activeFilters[key] = needle;
-    }
-  });
-
-  filteredRecords = allRecords.filter(record => {
-    for (const [key, needle] of Object.entries(activeFilters)) {
-      const haystack = formatDisplayValue(key, record ? record[key] : '').toLowerCase();
-      if (!haystack.includes(needle)) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  meta.textContent = 'Records: ' + filteredRecords.length + ' / ' + allRecords.length;
-  renderAllRows();
-}
-
-function renderAllRows() {
-  const colspan = Math.max(allColumns.length, 1);
-
-  if (!filteredRecords.length) {
-    tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="small">No records found</td></tr>';
-    return;
-  }
-
-  const parts = [];
-  for (let i = 0; i < filteredRecords.length; i++) {
-    const record = filteredRecords[i];
-    const row = [];
-
-    for (let j = 0; j < allColumns.length; j++) {
-      const key = allColumns[j];
-      const rawValue = record ? record[key] : '';
-      const displayValue = formatDisplayValue(key, rawValue);
-      const cellClasses = [];
-      if (isMonospaceColumn(key, rawValue)) {
-        cellClasses.push('mono');
-      }
-
-      let cellContent = escapeHtml(displayValue);
-      if (displayValue && isLevelColumn(key)) {
-        cellContent = '<span class="pill ' + levelPillClass(displayValue) + '">' + escapeHtml(displayValue) + '</span>';
-      }
-
-      const classAttr = cellClasses.length ? ' class="' + cellClasses.join(' ') + '"' : '';
-      row.push(
-        '<td' + classAttr + ' title="' + escapeHtml(displayValue) + '">' + cellContent + '</td>'
-      );
-    }
-
-    parts.push('<tr>' + row.join('') + '</tr>');
-  }
-
-  tbody.innerHTML = parts.join('');
-}
-
-function formatDisplayValue(key, value) {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  if (typeof value === 'string') {
-    if (isTimeColumn(key)) {
-      return formatLocalDateTime(value);
-    }
-    return value;
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-
-  try {
-    return JSON.stringify(value);
-  } catch (e) {
-    return String(value);
-  }
-}
-
-function isTimeColumn(key) {
-  const normalized = normalizeKeyName(key);
-  return normalized === 'time' ||
-    normalized === 'timestamp' ||
-    normalized === 'ts' ||
-    normalized === 'datetime' ||
-    normalized === 'date' ||
-    normalized === 'createdat' ||
-    normalized === 'loggedat' ||
-    normalized === 'eventtime';
-}
-
-function isLevelColumn(key) {
-  const normalized = normalizeKeyName(key);
-  return normalized === 'level' ||
-    normalized === 'severity' ||
-    normalized === 'loglevel' ||
-    normalized === 'lvl';
-}
-
-function isMonospaceColumn(key, value) {
-  const normalized = normalizeKeyName(key);
-
-  if (isTimeColumn(key) || normalized === 'sourcefile' || normalized === 'linenumber') {
-    return true;
-  }
-  if (normalized.includes('id') || normalized.includes('uuid') || normalized.includes('trace') || normalized.includes('caller') || normalized.includes('path') || normalized.includes('file')) {
-    return true;
-  }
-  return value && typeof value === 'object';
-}
-
-function guessColumnWidth(key) {
-  const normalized = normalizeKeyName(key);
-
-  if (isTimeColumn(key)) return 190;
-  if (isLevelColumn(key)) return 120;
-  if (normalized === 'message' || normalized === 'msg' || normalized === 'description' || normalized === 'event' || normalized === 'stack' || normalized === 'error') return 420;
-  if (normalized === 'sourcefile') return 170;
-  if (normalized === 'linenumber') return 90;
-  if (normalized.includes('id') || normalized.includes('caller') || normalized.includes('logger') || normalized.includes('service') || normalized.includes('component')) return 220;
-  return 240;
-}
-
-function levelPillClass(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-
-  if (normalized.includes('error') || normalized.includes('fatal') || normalized.includes('panic')) {
-    return 'level-error';
-  }
-  if (normalized.includes('warn')) {
-    return 'level-warn';
-  }
-  if (normalized.includes('debug') || normalized.includes('trace')) {
-    return 'level-debug';
-  }
-  if (normalized.includes('info') || normalized.includes('notice')) {
-    return 'level-info';
-  }
-  return 'level-other';
-}
-
-function formatLocalDateTime(rawValue) {
-  if (!rawValue) return '';
-
-  if (/^-?\d+(\.\d+)?$/.test(rawValue)) {
-    const numericValue = Number(rawValue);
-    if (!Number.isNaN(numericValue)) {
-      return formatNumericTimestamp(numericValue) || rawValue;
-    }
-  }
-
-  const d = new Date(rawValue);
-  if (isNaN(d.getTime())) return rawValue;
-
-  return formatDateObject(d);
-}
-
-function formatNumericTimestamp(numericValue) {
-  if (!Number.isFinite(numericValue)) {
-    return '';
-  }
-
-  let millis = numericValue;
-  const abs = Math.abs(numericValue);
-
-  if (abs >= 1e18) {
-    millis = numericValue / 1e6;
-  } else if (abs >= 1e15) {
-    millis = numericValue / 1e3;
-  } else if (abs >= 1e12) {
-    millis = numericValue;
-  } else {
-    millis = numericValue * 1e3;
-  }
-
-  const d = new Date(millis);
-  if (isNaN(d.getTime())) {
-    return '';
-  }
-
-  return formatDateObject(d);
-}
-
-function formatDateObject(d) {
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-
-  return dd + '/' + mm + '/' + yyyy + ' ' + hh + ':' + mi + ':' + ss;
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
-
-function initColumnResize() {
-  const headers = table.querySelectorAll('thead tr.header-row th.resizable');
-  const cols = colgroup.querySelectorAll('col');
-
-  headers.forEach((th, index) => {
-    const resizer = th.querySelector('.resizer');
-    if (!resizer || !cols[index]) return;
-
-    let startX = 0;
-    let startWidth = 0;
-    const colKey = th.dataset.col || '';
-
-    const onMouseMove = (e) => {
-      const newWidth = Math.max(80, startWidth + (e.clientX - startX));
-      cols[index].style.width = newWidth + 'px';
-      columnWidths[colKey] = newWidth;
-      th.classList.add('resizing');
+  <header class="appbar">
+    <div class="appbar-title">Log Viewer</div>
+  </header>
+
+  <main class="page-content">
+    <div class="toolbar">
+      <label>Folder:
+        <select id="folder" style="width:220px">
+          <option value="">Select</option>
+        </select>
+      </label>
+
+      <label>File:
+        <select id="file" style="width:220px">
+          <option value="">All</option>
+        </select>
+      </label>
+
+      <label>Search:
+        <input id="search" type="text" placeholder="Search any key or value..." style="width:360px" />
+      </label>
+
+      <label>Limit:
+        <input id="limit" type="number" value="5000" min="1" step="1" style="width:100px" />
+      </label>
+
+      <button id="reloadBtn">Reload</button>
+      <button id="clearBtn">Clear filters</button>
+    </div>
+
+    <div class="meta" id="meta">Ready.</div>
+
+    <div class="table-wrap">
+      <table id="logTable">
+        <colgroup id="colgroup"></colgroup>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="errbox" id="errbox"></div>
+  </main>
+
+  <script>
+    const COLUMN_PRIORITY = {
+      time: 0,
+      timestamp: 1,
+      ts: 2,
+      datetime: 3,
+      date: 4,
+      createdat: 5,
+      loggedat: 6,
+      eventtime: 7,
+      level: 20,
+      severity: 21,
+      loglevel: 22,
+      lvl: 23,
+      message: 40,
+      msg: 41,
+      event: 42,
+      description: 43,
+      caller: 60,
+      logger: 61,
+      service: 62,
+      component: 63,
+      sourcefile: 1000,
+      linenumber: 1001
     };
 
-    const onMouseUp = () => {
-      th.classList.remove('resizing');
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+    const tbody = document.getElementById('tbody');
+    const meta = document.getElementById('meta');
+    const errbox = document.getElementById('errbox');
+    const folderSelect = document.getElementById('folder');
+    const fileSelect = document.getElementById('file');
+    const table = document.getElementById('logTable');
+    const thead = document.getElementById('thead');
+    const colgroup = document.getElementById('colgroup');
+    const tableWrap = document.querySelector('.table-wrap');
 
-    resizer.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startX = e.clientX;
-      startWidth = th.getBoundingClientRect().width;
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+    let filteredRecords = [];
+    let allRecords = [];
+    let allColumns = [];
+    let columnFilterState = {};
+    let columnWidths = {};
+
+    async function loadFolders() {
+      const currentValue = folderSelect.value;
+
+      try {
+        const res = await fetch('/log-viewer/api/folders');
+        const data = await res.json();
+
+        folderSelect.innerHTML = '<option value="">Select</option>';
+
+        if (Array.isArray(data.folders)) {
+          for (const f of data.folders) {
+            const opt = document.createElement('option');
+            opt.value = f.name;
+            opt.textContent = f.name;
+            folderSelect.appendChild(opt);
+          }
+        }
+
+        const exists = Array.from(folderSelect.options).some(o => o.value === currentValue);
+        folderSelect.value = exists ? currentValue : '';
+      } catch (e) {
+        folderSelect.innerHTML = '<option value="">Select</option>';
+      }
+    }
+
+    async function loadFiles() {
+      const currentValue = fileSelect.value;
+      const folder = folderSelect.value;
+
+      errbox.style.display = 'none';
+      errbox.textContent = '';
+
+      fileSelect.innerHTML = '<option value="">All</option>';
+
+      if (!folder) {
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ folder });
+        const res = await fetch('/log-viewer/api/files?' + params.toString());
+        const data = await res.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || 'Invalid API response');
+        }
+
+        if (Array.isArray(data.files)) {
+          for (const f of data.files) {
+            const opt = document.createElement('option');
+            opt.value = f;
+            opt.textContent = f;
+            fileSelect.appendChild(opt);
+          }
+        }
+
+        const exists = Array.from(fileSelect.options).some(o => o.value === currentValue);
+        fileSelect.value = exists ? currentValue : '';
+
+        if (Array.isArray(data.errors) && data.errors.length > 0) {
+          errbox.style.display = 'block';
+          errbox.innerHTML = '<b>Folder read warnings:</b><br>' +
+            data.errors.map(e => escapeHtml(e)).join('<br>');
+        }
+      } catch (e) {
+        fileSelect.innerHTML = '<option value="">All</option>';
+      }
+    }
+
+    async function loadLogs() {
+      const folder = document.getElementById('folder').value;
+      const file = document.getElementById('file').value;
+      const q = document.getElementById('search').value.trim();
+      const limit = document.getElementById('limit').value || '5000';
+
+      const params = new URLSearchParams({ limit });
+      if (folder) params.set('folder', folder);
+      if (file) params.set('file', file);
+      if (q) params.set('q', q);
+
+      meta.textContent = 'Loading...';
+      errbox.style.display = 'none';
+      errbox.textContent = '';
+      tbody.innerHTML = '';
+
+      if (!folder) {
+        allRecords = [];
+        filteredRecords = [];
+        allColumns = [];
+        rebuildTable();
+        renderAllRows();
+        meta.textContent = 'Select a folder';
+        tableWrap.scrollTop = 0;
+        return;
+      }
+
+      try {
+        const res = await fetch('/log-viewer/api/logs?' + params.toString());
+        const data = await res.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || 'Invalid API response');
+        }
+
+        allRecords = Array.isArray(data.records) ? data.records : [];
+        allColumns = Array.isArray(data.columns) ? data.columns : buildColumnsFromRecords(allRecords);
+        rebuildTable();
+        tableWrap.scrollTop = 0;
+        applyColumnFilters();
+
+        if (Array.isArray(data.errors) && data.errors.length > 0) {
+          errbox.style.display = 'block';
+          errbox.innerHTML = '<b>Parsing/read warnings:</b><br>' +
+            data.errors.slice(0, 20).map(e => escapeHtml(e)).join('<br>') +
+            (data.errors.length > 20 ? '<br>... ' + (data.errors.length - 20) + ' more warnings' : '');
+        }
+      } catch (e) {
+        meta.textContent = 'Loading error';
+        errbox.style.display = 'block';
+        errbox.textContent = String(e);
+        allRecords = [];
+        filteredRecords = [];
+        allColumns = [];
+        rebuildTable();
+        renderAllRows();
+        tableWrap.scrollTop = 0;
+      }
+    }
+
+    function buildColumnsFromRecords(records) {
+      const seen = new Set();
+
+      records.forEach(record => {
+        if (!record || typeof record !== 'object') {
+          return;
+        }
+        Object.keys(record).forEach(key => seen.add(key));
+      });
+
+      return Array.from(seen).sort(compareColumns);
+    }
+
+    function compareColumns(a, b) {
+      const pa = columnPriority(a);
+      const pb = columnPriority(b);
+      if (pa === pb) {
+        return a.localeCompare(b);
+      }
+      return pa - pb;
+    }
+
+    function columnPriority(name) {
+      const normalized = normalizeKeyName(name);
+      if (Object.prototype.hasOwnProperty.call(COLUMN_PRIORITY, normalized)) {
+        return COLUMN_PRIORITY[normalized];
+      }
+      return 500;
+    }
+
+    function normalizeKeyName(name) {
+      return String(name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[-\s_.@/]+/g, '');
+    }
+
+    function rebuildTable() {
+      colgroup.innerHTML = '';
+      thead.innerHTML = '';
+
+      if (!allColumns.length) {
+        return;
+      }
+
+      const colParts = [];
+      const headerParts = [];
+      const filterParts = [];
+
+      for (const col of allColumns) {
+        const width = columnWidths[col] || guessColumnWidth(col);
+        colParts.push('<col style="width:' + width + 'px">');
+        headerParts.push(
+          '<th class="resizable" data-col="' + escapeHtml(col) + '"><div class="th-content">' +
+          escapeHtml(col) +
+          '<div class="resizer"></div></div></th>'
+        );
+
+        const currentValue = columnFilterState[col] || '';
+        const extraClass = isMonospaceColumn(col, null) ? ' mono' : '';
+        filterParts.push(
+          '<th><input class="filter-input' + extraClass + '" data-col="' + escapeHtml(col) +
+          '" type="text" placeholder="Filter" value="' + escapeHtml(currentValue) + '"></th>'
+        );
+      }
+
+      colgroup.innerHTML = colParts.join('');
+      thead.innerHTML =
+        '<tr class="header-row">' + headerParts.join('') + '</tr>' +
+        '<tr class="filter-row">' + filterParts.join('') + '</tr>';
+
+      bindColumnFilterInputs();
+      initColumnResize();
+    }
+
+    function bindColumnFilterInputs() {
+      document.querySelectorAll('.filter-input').forEach(input => {
+        let localTimer = null;
+        input.addEventListener('input', () => {
+          columnFilterState[input.dataset.col] = input.value;
+          clearTimeout(localTimer);
+          localTimer = setTimeout(applyColumnFilters, 120);
+        });
+      });
+    }
+
+    function applyColumnFilters() {
+      const activeFilters = {};
+
+      Object.entries(columnFilterState).forEach(([key, value]) => {
+        const needle = String(value || '').trim().toLowerCase();
+        if (needle) {
+          activeFilters[key] = needle;
+        }
+      });
+
+      filteredRecords = allRecords.filter(record => {
+        for (const [key, needle] of Object.entries(activeFilters)) {
+          const haystack = formatDisplayValue(key, record ? record[key] : '').toLowerCase();
+          if (!haystack.includes(needle)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      meta.textContent = 'Records: ' + filteredRecords.length + ' / ' + allRecords.length;
+      renderAllRows();
+    }
+
+    function renderAllRows() {
+      const colspan = Math.max(allColumns.length, 1);
+
+      if (!filteredRecords.length) {
+        tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="small">No records found</td></tr>';
+        return;
+      }
+
+      const parts = [];
+      for (let i = 0; i < filteredRecords.length; i++) {
+        const record = filteredRecords[i];
+        const row = [];
+
+        for (let j = 0; j < allColumns.length; j++) {
+          const key = allColumns[j];
+          const rawValue = record ? record[key] : '';
+          const displayValue = formatDisplayValue(key, rawValue);
+          const cellClasses = [];
+          if (isMonospaceColumn(key, rawValue)) {
+            cellClasses.push('mono');
+          }
+
+          let cellContent = escapeHtml(displayValue);
+          if (displayValue && isLevelColumn(key)) {
+            cellContent = '<span class="pill ' + levelPillClass(displayValue) + '">' + escapeHtml(displayValue) + '</span>';
+          }
+
+          const classAttr = cellClasses.length ? ' class="' + cellClasses.join(' ') + '"' : '';
+          row.push(
+            '<td' + classAttr + ' title="' + escapeHtml(displayValue) + '">' + cellContent + '</td>'
+          );
+        }
+
+        parts.push('<tr>' + row.join('') + '</tr>');
+      }
+
+      tbody.innerHTML = parts.join('');
+    }
+
+    function formatDisplayValue(key, value) {
+      if (value === null || value === undefined) {
+        return '';
+      }
+
+      if (typeof value === 'string') {
+        if (isTimeColumn(key)) {
+          return formatLocalDateTime(value);
+        }
+        return value;
+      }
+
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+      }
+
+      try {
+        return JSON.stringify(value);
+      } catch (e) {
+        return String(value);
+      }
+    }
+
+    function isTimeColumn(key) {
+      const normalized = normalizeKeyName(key);
+      return normalized === 'time' ||
+        normalized === 'timestamp' ||
+        normalized === 'ts' ||
+        normalized === 'datetime' ||
+        normalized === 'date' ||
+        normalized === 'createdat' ||
+        normalized === 'loggedat' ||
+        normalized === 'eventtime';
+    }
+
+    function isLevelColumn(key) {
+      const normalized = normalizeKeyName(key);
+      return normalized === 'level' ||
+        normalized === 'severity' ||
+        normalized === 'loglevel' ||
+        normalized === 'lvl';
+    }
+
+    function isMonospaceColumn(key, value) {
+      const normalized = normalizeKeyName(key);
+
+      if (isTimeColumn(key) || normalized === 'sourcefile' || normalized === 'linenumber') {
+        return true;
+      }
+      if (normalized.includes('id') || normalized.includes('uuid') || normalized.includes('trace') || normalized.includes('caller') || normalized.includes('path') || normalized.includes('file')) {
+        return true;
+      }
+      return value && typeof value === 'object';
+    }
+
+    function guessColumnWidth(key) {
+      const normalized = normalizeKeyName(key);
+
+      if (isTimeColumn(key)) return 190;
+      if (isLevelColumn(key)) return 120;
+      if (normalized === 'message' || normalized === 'msg' || normalized === 'description' || normalized === 'event' || normalized === 'stack' || normalized === 'error') return 420;
+      if (normalized === 'sourcefile') return 170;
+      if (normalized === 'linenumber') return 90;
+      if (normalized.includes('id') || normalized.includes('caller') || normalized.includes('logger') || normalized.includes('service') || normalized.includes('component')) return 220;
+      return 240;
+    }
+
+    function levelPillClass(value) {
+      const normalized = String(value || '').trim().toLowerCase();
+
+      if (normalized.includes('error') || normalized.includes('fatal') || normalized.includes('panic')) {
+        return 'level-error';
+      }
+      if (normalized.includes('warn')) {
+        return 'level-warn';
+      }
+      if (normalized.includes('debug') || normalized.includes('trace')) {
+        return 'level-debug';
+      }
+      if (normalized.includes('info') || normalized.includes('notice')) {
+        return 'level-info';
+      }
+      return 'level-other';
+    }
+
+    function formatLocalDateTime(rawValue) {
+      if (!rawValue) return '';
+
+      if (/^-?\d+(\.\d+)?$/.test(rawValue)) {
+        const numericValue = Number(rawValue);
+        if (!Number.isNaN(numericValue)) {
+          return formatNumericTimestamp(numericValue) || rawValue;
+        }
+      }
+
+      const d = new Date(rawValue);
+      if (isNaN(d.getTime())) return rawValue;
+
+      return formatDateObject(d);
+    }
+
+    function formatNumericTimestamp(numericValue) {
+      if (!Number.isFinite(numericValue)) {
+        return '';
+      }
+
+      let millis = numericValue;
+      const abs = Math.abs(numericValue);
+
+      if (abs >= 1e18) {
+        millis = numericValue / 1e6;
+      } else if (abs >= 1e15) {
+        millis = numericValue / 1e3;
+      } else if (abs >= 1e12) {
+        millis = numericValue;
+      } else {
+        millis = numericValue * 1e3;
+      }
+
+      const d = new Date(millis);
+      if (isNaN(d.getTime())) {
+        return '';
+      }
+
+      return formatDateObject(d);
+    }
+
+    function formatDateObject(d) {
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+
+      return dd + '/' + mm + '/' + yyyy + ' ' + hh + ':' + mi + ':' + ss;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function initColumnResize() {
+      const headers = table.querySelectorAll('thead tr.header-row th.resizable');
+      const cols = colgroup.querySelectorAll('col');
+
+      headers.forEach((th, index) => {
+        const resizer = th.querySelector('.resizer');
+        if (!resizer || !cols[index]) return;
+
+        let startX = 0;
+        let startWidth = 0;
+        const colKey = th.dataset.col || '';
+
+        const onMouseMove = (e) => {
+          const newWidth = Math.max(80, startWidth + (e.clientX - startX));
+          cols[index].style.width = newWidth + 'px';
+          columnWidths[colKey] = newWidth;
+          th.classList.add('resizing');
+        };
+
+        const onMouseUp = () => {
+          th.classList.remove('resizing');
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        };
+
+        resizer.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startX = e.clientX;
+          startWidth = th.getBoundingClientRect().width;
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+      });
+    }
+
+    document.getElementById('folder').addEventListener('change', async () => {
+      document.getElementById('file').value = '';
+      columnFilterState = {};
+      await loadFiles();
+      await loadLogs();
     });
-  });
-}
 
-document.getElementById('folder').addEventListener('change', async () => {
-  document.getElementById('file').value = '';
-  columnFilterState = {};
-  await loadFiles();
-  await loadLogs();
-});
+    document.getElementById('reloadBtn').addEventListener('click', async () => {
+      await loadFiles();
+      await loadLogs();
+    });
 
-document.getElementById('reloadBtn').addEventListener('click', async () => {
-  await loadFiles();
-  await loadLogs();
-});
+    document.getElementById('clearBtn').addEventListener('click', async () => {
+      document.getElementById('search').value = '';
+      document.getElementById('folder').value = '';
+      document.getElementById('file').value = '';
+      document.getElementById('limit').value = '5000';
+      columnFilterState = {};
+      await loadFiles();
+      await loadLogs();
+    });
 
-document.getElementById('clearBtn').addEventListener('click', async () => {
-  document.getElementById('search').value = '';
-  document.getElementById('folder').value = '';
-  document.getElementById('file').value = '';
-  document.getElementById('limit').value = '5000';
-  columnFilterState = {};
-  await loadFiles();
-  await loadLogs();
-});
+    let searchTimer = null;
+    document.getElementById('search').addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadLogs, 250);
+    });
 
-let searchTimer = null;
-document.getElementById('search').addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(loadLogs, 250);
-});
+    document.getElementById('limit').addEventListener('change', loadLogs);
+    document.getElementById('file').addEventListener('change', loadLogs);
 
-document.getElementById('limit').addEventListener('change', loadLogs);
-document.getElementById('file').addEventListener('change', loadLogs);
-
-(async function init() {
-  await loadFolders();
-  await loadFiles();
-  await loadLogs();
-})();
-</script>
+    (async function init() {
+      await loadFolders();
+      await loadFiles();
+      await loadLogs();
+    })();
+  </script>
 </body>
 </html>`
